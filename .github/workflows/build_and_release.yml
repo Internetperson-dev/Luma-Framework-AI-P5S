@@ -7,13 +7,60 @@ on:
     branches: [ main ]
 
 jobs:
+  # Fast compile+link check for a single in-progress game mod.
+  #
+  # Enabled by setting the "LUMA_TARGET_PROJECT" repository variable to that
+  # game's folder/project name (Settings -> Secrets and variables -> Actions ->
+  # Variables). While it's set, this job builds only that single project instead
+  # of the whole solution, giving compile AND link feedback in a couple of
+  # minutes rather than ~20 (it skips rebuilding every other mod).
+  # Delete the variable once the game builds to turn this job off - the "build"
+  # job below always builds and packages everything.
+  build-fast:
+    if: vars.LUMA_TARGET_PROJECT != ''
+    runs-on: windows-2025-vs2026
+    env:
+      LUMA_TARGET_PROJECT: ${{ vars.LUMA_TARGET_PROJECT }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.1.2
+
+    - name: Integrate vcpkg with MSBuild
+      shell: pwsh
+      run: '& "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" integrate install'
+
+    # This requires the git directory to be added to the PATH Windows environment variables, to properly set up versioning information
+    - name: Build ReShade.sln Release
+      run: msbuild "Source\External\reshade\ReShade.sln" /p:Configuration="Release" /p:Platform="64-bit" /p:PlatformToolset=v145
+      continue-on-error: true
+
+    # Note: this job is NOT continue-on-error on purpose, it's only a fast
+    # "does this one project compile and link" check, so it should go red.
+    - name: Build only ${{ vars.LUMA_TARGET_PROJECT }}
+      shell: pwsh
+      run: |
+        $project = "Source\Games\$env:LUMA_TARGET_PROJECT\$env:LUMA_TARGET_PROJECT.vcxproj"
+        if (-not (Test-Path $project)) {
+          Write-Host "::error::'$project' not found, is the 'LUMA_TARGET_PROJECT' repository variable set to an existing game folder name?"
+          exit 1
+        }
+        Write-Host "::notice::WIP mode: building only $project (delete the 'LUMA_TARGET_PROJECT' repository variable to build the whole solution)"
+        msbuild $project /p:Configuration=Development-Debug /p:Platform=x64 /p:DefineConstants="REMOTE_BUILD=1"
+
+  # Full solution build + packaging/release.
   build:
     # runs-on: windows-2022
     runs-on: windows-2025-vs2026
     strategy:
       matrix:
         config: [Development-Debug, Development-Release, Test-Release, Publishing-Release]
-        platform: [x64, Win32]
+        platform: [x64] # 64-bit only: Win32 support was dropped, most supported games are 64-bit only anyway
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -30,9 +77,7 @@ jobs:
 
     # This requires the git directory to be added to the PATH Windows environment variables, to properly set up versioning information
     - name: Build ReShade.sln Release
-      run: |
-        msbuild "Source\External\reshade\ReShade.sln" /p:Configuration="Release" /p:Platform="64-bit" /p:PlatformToolset=v145
-        msbuild "Source\External\reshade\ReShade.sln" /p:Configuration="Release" /p:Platform="32-bit" /p:PlatformToolset=v145
+      run: msbuild "Source\External\reshade\ReShade.sln" /p:Configuration="Release" /p:Platform="64-bit" /p:PlatformToolset=v145
       continue-on-error: true
       
     - name: Build Luma.sln ${{ matrix.config }}-${{ matrix.platform }}
