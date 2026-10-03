@@ -87,6 +87,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Granblue Fantasy Relink", "
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Persona 5 Royal", "Source\Games\Persona 5 Royal\Persona 5 Royal.vcxproj", "{D947ACC3-CDAC-4227-8809-AABF39B1C75B}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Persona 5 Strikers", "Source\Games\Persona 5 Strikers\Persona 5 Strikers.vcxproj", "{08143144-3ABB-D7B3-815C-7A798924E8E6}"
+EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Batman Arkham Knight", "Source\Games\Batman Arkham Knight\Batman Arkham Knight.vcxproj", "{5DDD2903-527F-4CB2-9EEB-D4BAD4253B71}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "GreedFall", "Source\Games\GreedFall\GreedFall.vcxproj", "{E25F53A3-9BC6-4E7B-B652-023FDAFF167C}"
