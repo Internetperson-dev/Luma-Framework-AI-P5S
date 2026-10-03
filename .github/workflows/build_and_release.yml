@@ -12,8 +12,8 @@ jobs:
     runs-on: windows-2025-vs2026
     strategy:
       matrix:
-        config: [Development-Debug, Development-Release, Test-Release, Publishing-Release]
-        platform: [x64, Win32]
+        config: [Development-Release]
+        platform: [x64]
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -32,7 +32,6 @@ jobs:
     - name: Build ReShade.sln Release
       run: |
         msbuild "Source\External\reshade\ReShade.sln" /p:Configuration="Release" /p:Platform="64-bit" /p:PlatformToolset=v145
-        msbuild "Source\External\reshade\ReShade.sln" /p:Configuration="Release" /p:Platform="32-bit" /p:PlatformToolset=v145
       continue-on-error: true
       
     - name: Build Luma.sln ${{ matrix.config }}-${{ matrix.platform }}
