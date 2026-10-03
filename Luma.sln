@@ -87,6 +87,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Granblue Fantasy Relink", "
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Persona 5 Royal", "Source\Games\Persona 5 Royal\Persona 5 Royal.vcxproj", "{D947ACC3-CDAC-4227-8809-AABF39B1C75B}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Persona 5 Strikers", "Source\Games\Persona 5 Strikers\Persona 5 Strikers.vcxproj", "{FEAA789F-3BAC-469A-92FB-E5B739DBCEA6}"
+EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Batman Arkham Knight", "Source\Games\Batman Arkham Knight\Batman Arkham Knight.vcxproj", "{5DDD2903-527F-4CB2-9EEB-D4BAD4253B71}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "GreedFall", "Source\Games\GreedFall\GreedFall.vcxproj", "{E25F53A3-9BC6-4E7B-B652-023FDAFF167C}"
@@ -675,6 +677,18 @@ Global
 		{D947ACC3-CDAC-4227-8809-AABF39B1C75B}.Test-Release|Win32.ActiveCfg = Test-Release|x64
 		{D947ACC3-CDAC-4227-8809-AABF39B1C75B}.Test-Release|x64.ActiveCfg = Test-Release|x64
 		{D947ACC3-CDAC-4227-8809-AABF39B1C75B}.Test-Release|x64.Build.0 = Test-Release|x64
+		{FEAA789F-3BAC-469A-92FB-E5B739DBCEA6}.Development-Debug|Win32.ActiveCfg = Development-Debug|x64
+		{FEAA789F-3BAC-469A-92FB-E5B739DBCEA6}.Development-Debug|x64.ActiveCfg = Development-Debug|x64
+		{FEAA789F-3BAC-469A-92FB-E5B739DBCEA6}.Development-Debug|x64.Build.0 = Development-Debug|x64
+		{FEAA789F-3BAC-469A-92FB-E5B739DBCEA6}.Development-Release|Win32.ActiveCfg = Development-Release|x64
+		{FEAA789F-3BAC-469A-92FB-E5B739DBCEA6}.Development-Release|x64.ActiveCfg = Development-Release|x64
+		{FEAA789F-3BAC-469A-92FB-E5B739DBCEA6}.Development-Release|x64.Build.0 = Development-Release|x64
+		{FEAA789F-3BAC-469A-92FB-E5B739DBCEA6}.Publishing-Release|Win32.ActiveCfg = Publishing-Release|x64
+		{FEAA789F-3BAC-469A-92FB-E5B739DBCEA6}.Publishing-Release|x64.ActiveCfg = Publishing-Release|x64
+		{FEAA789F-3BAC-469A-92FB-E5B739DBCEA6}.Publishing-Release|x64.Build.0 = Publishing-Release|x64
+		{FEAA789F-3BAC-469A-92FB-E5B739DBCEA6}.Test-Release|Win32.ActiveCfg = Test-Release|x64
+		{FEAA789F-3BAC-469A-92FB-E5B739DBCEA6}.Test-Release|x64.ActiveCfg = Test-Release|x64
+		{FEAA789F-3BAC-469A-92FB-E5B739DBCEA6}.Test-Release|x64.Build.0 = Test-Release|x64
 		{5DDD2903-527F-4CB2-9EEB-D4BAD4253B71}.Development-Debug|Win32.ActiveCfg = Development-Debug|x64
 		{5DDD2903-527F-4CB2-9EEB-D4BAD4253B71}.Development-Debug|x64.ActiveCfg = Development-Debug|x64
 		{5DDD2903-527F-4CB2-9EEB-D4BAD4253B71}.Development-Debug|x64.Build.0 = Development-Debug|x64
@@ -1020,6 +1034,7 @@ Global
 		{ADAE0E50-F63A-4FA5-BC6A-E1D974CC2D2C} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{36D63B53-C40A-479C-94F9-FC93CBB49FEB} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{D947ACC3-CDAC-4227-8809-AABF39B1C75B} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{FEAA789F-3BAC-469A-92FB-E5B739DBCEA6} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{5DDD2903-527F-4CB2-9EEB-D4BAD4253B71} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{E25F53A3-9BC6-4E7B-B652-023FDAFF167C} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{82505EE6-0256-4E89-B64A-227E87B9BE67} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
