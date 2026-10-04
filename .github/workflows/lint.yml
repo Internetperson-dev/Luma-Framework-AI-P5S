@@ -25,6 +25,26 @@ jobs:
           files-changed-only: true # should be set to true initially, but false for testing
           thread-comments: false
           ignore: 'Source/External/** | **/safetyhook* | **/Zydis*'
+          # clang-tidy is disabled here because it cannot parse this codebase on the
+          # Linux runner, so every diagnostic it emits is a false positive. Three
+          # separate environment problems, each fatal on its own:
+          #   1. There is no compilation database, so clang infers the language from the
+          #      file extension. ".h" is taken as C, and C++ then fails to parse at all:
+          #      "unknown type name 'constexpr'", "unknown type name 'namespace'".
+          #   2. Game mods include the core with Windows-style separators
+          #      ("..\..\Core\core.hpp"), which clang cannot resolve on Linux:
+          #      "'..\..\Core\core.hpp' file not found".
+          #   3. MSVC keywords such as "__forceinline" are not recognised:
+          #      "unknown type name '__forceinline'".
+          # These are reported as clang-diagnostic-errors and counted by "checks-failed",
+          # which fails the job below. Previously the gate stayed green only because
+          # "files-changed-only" meant no source file was ever actually linted, so the
+          # first PR touching any .cpp or .h turned it red.
+          #
+          # To re-enable it, generate a compile_commands.json with the real MSVC flags
+          # (/std:c++20 plus the Windows SDK) and point this at it via "compile-commands".
+          # clang-format is unaffected and is still enforced on changed files.
+          tidy-checks: '-*'
       - name: Fail fast?!
         if: steps.linter.outputs.checks-failed > 0
         run: exit 1
