@@ -1,307 +1,176 @@
 #define GAME_PERSONA_5_STRIKERS 1
 
-// The game may try to create a DX9 device on boot
+// P5S (Katana engine) creates a throwaway Direct3D 9 device on boot before it ever
+// reaches its Direct3D 11 device (visible in ReShade.log as "Direct3DCreate9" +
+// "IDirect3D9::CreateDevice" ~2s before "D3D11CreateDevice"). Luma only supports
+// DX11, so this flag is what makes it skip the D3D9 device instead of asserting.
 #define CHECK_GRAPHICS_API_COMPATIBILITY 1
 
-// Protect against games that cache pipeline state
-#define ENABLE_GAME_PIPELINE_STATE_READBACK 1
+// NOTE: deliberately NOT enabling:
+// - ENABLE_GAME_PIPELINE_STATE_READBACK: it only exists so *other* mods can read back
+//   states Luma changed. There is nothing to read back yet (no shader hashes), so it
+//   just adds a per-draw hook surface to a port that isn't stable yet.
+// - force_upgrade_linear_samplers / enable_samplers_upgrade: P5R needs a runtime code
+//   patch to make sampler upgrades behave (see its "PatchSamplerStates"). Do not assume
+//   this engine tolerates them unmodified.
 
 #include "..\..\Core\core.hpp"
 
 namespace
 {
-   ShaderHashesList shader_hashes_Copy;
+   // ---------------------------------------------------------------------------------
+   // Shader hashes for this engine are NOT known yet.
+   //
+   // Bringing up a new game, step by step:
+   //
+   //   1. DUMP. Build "Development-Release|x64". That turns on ALLOW_SHADERS_DUMPING
+   //      (core.hpp:150) and "auto_dump" defaults to it (core.hpp:388), so every shader
+   //      the game creates is written as "0x<HASH8>.<type>_<major>_<minor>.cso" (+ a
+   //      ".meta" with resource reflections, DEVELOPMENT only).
+   //      -> Dumps land in "<folder of the game exe>\Luma\Persona 5 Strikers\Dump\"
+   //         (GetShadersRootPath, core.hpp:1043). CI passes REMOTE_BUILD=1, which
+   //         disables the local-only fallback to this repo's "Shaders" folder
+   //         (core.hpp:1065), so on a CI build that is always the location above. Copy
+   //         the dumps out of there afterwards; they are never shipped (Scripts/package.ps1
+   //         skips "Dump*" folders and all ".cso" files).
+   //         Do NOT bother with the "ShadersPath" ReShade.ini key: it is only honoured
+   //         when the path is NOT an existing populated directory (core.hpp:1059), so it
+   //         cannot redirect dumps into a populated repo "Shaders" folder.
+   //         Dumps are safe from being cleaned: CleanShadersCache only deletes "0x*"
+   //         .cso/.meta sitting directly in "Global\" or "Persona 5 Strikers\" (it goes
+   //         through IsValidShadersSubPath, core.hpp:1114), never inside "Dump\".
+   //
+   //   2. IDENTIFY. In the ImGui dev UI, the "Captured Commands" tab lists every draw
+   //      with its shader hash and the RTV/SRV/CB it binds, including their sizes and
+   //      formats; the "Disassembly"/"HLSL" tabs confirm what a shader actually does.
+   //      Useful tells: a swapchain copy draws to an RTV at swapchain resolution in the
+   //      swapchain format while sampling scene colour; an encode pass writes the post
+   //      process chain into the swapchain; the UI draws after that from a font/atlas SRV.
+   //
+   //   3. REPLACE. Write your replacement as an .hlsl file named
+   //      "<EffectName>_0x<HASH8>.<type>_<major>_<minor>.hlsl" directly in
+   //      "Shaders\Persona 5 Strikers\" (naming parsed at core.hpp:1849-1912; the hash
+   //      must be exactly 8 hex digits). THESE are the files that get packaged.
+   //      Prefer naming the file with the literal "########" and declaring
+   //        redirected_shader_hashes["<EffectName>"] = { "AABBCCDD", "11223344", ... };
+   //      in DllMain instead (core.hpp:598). That is the convention ~10 other game mods
+   //      use (Heavy Rain, Watch Dogs 2, INSIDE, Thumper...): one shader can serve
+   //      several hashes, and the pass keeps a readable name instead of a magic number.
+   //
+   //   4. LIST. Only if a pass needs game-specific handling (extra constants, a custom
+   //      swapchain copy, etc) do the hash lists below matter, via the DllMain
+   //      .emplace() calls.
+   //
+   // IMPORTANT: leave these EMPTY until then. Do not put placeholder values in them.
+   // "0" is a legal shader hash (see the comment on CachedPipeline::shader_hashes in
+   // includes/shaders.h), so a "harmless" 0x00000000 is a real match candidate, not a
+   // no-op -- it can silently trigger pass logic on an unrelated draw.
+   // ---------------------------------------------------------------------------------
    ShaderHashesList shader_hashes_SwapchainCopy;
    ShaderHashesList shader_hashes_PostProcessEncode;
    ShaderHashesList shader_hashes_Sky;
-   ShaderHashesList shader_hashes_BeginMaterialsDrawing;
-   ShaderHashesList shader_hashes_EndMaterialsDrawing;
 
-   bool first_frame_draw_call = true;
-   bool playing_video = false;
-   bool has_drawn_post_process = false;
-   int final_post_process_copy_draws = 0;
-   constexpr size_t max_final_post_process_copy_draws = 3;
-
-   com_ptr<ID3D11DepthStencilView> main_dsv;
-   com_ptr<ID3D11RenderTargetView> post_process_rtvs[max_final_post_process_copy_draws];
-   com_ptr<ID3D11RenderTargetView> upgraded_post_process_rtvs[max_final_post_process_copy_draws];
-   com_ptr<ID3D11ShaderResourceView> upgraded_post_process_srvs[max_final_post_process_copy_draws];
-   com_ptr<ID3D11Texture2D> upgraded_post_process_textures_2d[max_final_post_process_copy_draws];
-
-   bool upgrade_materials_samplers = true;
+#if DEVELOPMENT
+   // Logs which of this mod's shader hash lists are still unidentified, so the port's
+   // remaining work is visible from ReShade.log without reading the source.
+   void LogUnidentifiedShaderHashes()
+   {
+      // Generic on the list type on purpose: "shader_hashes_UI" is a core global declared as
+      // ShaderHashesList<Multiple, Graphics>, which is a different type from ours.
+      auto Report = [](const char* name, const auto& list)
+      {
+         if (list.Empty())
+         {
+            char line[160];
+            std::snprintf(line, sizeof(line), "[P5S] No shader hashes identified yet for \"%s\".", name);
+            reshade::log::message(reshade::log::level::info, line);
+         }
+      };
+      Report("SwapchainCopy", shader_hashes_SwapchainCopy);
+      Report("PostProcessEncode", shader_hashes_PostProcessEncode);
+      Report("Sky", shader_hashes_Sky);
+      Report("UI", shader_hashes_UI);
+   }
+#endif // DEVELOPMENT
 } // namespace
+
+struct Persona5StrikersDeviceData final : public GameDeviceData
+{
+};
 
 class Persona5Strikers final : public Game
 {
 public:
    void OnInit(bool async) override
    {
+      // NOTE: the pipeline descriptions below are UNVERIFIED assumptions carried over
+      // from the engine docs, not measured from the game. They only start to matter once
+      // this mod ships real shaders, since that is what consumes them. Re-derive them
+      // from your shader dump before trusting the output.
+      GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('0'); // Is the swapchain / post processing linear?
+      GetShaderDefineData(EARLY_DISPLAY_ENCODING_HASH).SetDefaultValue('0');  // Gamma + paper white applied during post processing, or deferred to display composition?
+      GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetDefaultValue('0');   // Which SDR transfer curve did the game use?
+      GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('1');   // Which SDR transfer curve should we emulate?
+      GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('0');            // How does the UI draw in? ("2" implies a separate UI render target, don't claim that yet)
+
+      // Cbuffer slots must be 0-13, or -1 to not set them at all. All valid ones must differ.
       luma_settings_cbuffer_index = 13;
       luma_data_cbuffer_index = 12;
+      luma_ui_cbuffer_index = -1; // Only meaningful for UI_DRAW_TYPE 1.
 
-      std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"IMPROVED_TONEMAPPING_TYPE", '1', true, false, "Enable modern tonemapping code combinations.", 3},
-         {"IMPROVED_COLOR_GRADING_TYPE", '0', true, false, "Improves the original grading.", 3},
-         {"IMPROVED_BLOOM", '1', true, false, "Reduces the overly strong bloom effect.", 1},
-         {"ENABLE_HDR_COLOR_GRADING", '1', true, false, "Enables color grading in HDR space.", 1},
-         {"ENABLE_SDR_COLOR_GRADING", '1', true, false, "Enables color grading after vanilla SDR tonemapping.", 1},
-         {"ENABLE_HDR_BOOST", '1', true, false, "Enable a \"Fake\" HDR boosting effect (applies to videos too).", 1},
-         {"ENABLE_VIGNETTE", '1', true, false, "Allows disabling the game's vignette effect.", 1},
-         {"ENABLE_FXAA", '1', true, false, "Adds FXAA anti-aliasing.", 1},
-      };
-      shader_defines_data.append_range(game_shader_defines_data);
+      // Mirrored in "Shaders\Persona 5 Strikers\Includes\GameCBuffers.hlsl".
+      default_luma_global_game_settings.GameSetting01 = cb_luma_global_settings.GameSettings.GameSetting01 = 0.5f;
+      default_luma_global_game_settings.GameSetting02 = cb_luma_global_settings.GameSettings.GameSetting02 = 33;
+   }
 
-      GetShaderDefineData(TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL_HASH).SetDefaultValue('1');
-      GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('0');
-      GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetDefaultValue('0');
-      GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('1');
-      GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2');
+   void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
+   {
+      device_data.game = new Persona5StrikersDeviceData;
    }
 
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
-      if ((stages & reshade::api::shader_stage::pixel) != 0 && first_frame_draw_call && test_index != 14)
-      {
-         first_frame_draw_call = false;
-         if (original_shader_hashes.Contains(shader_hashes_Copy))
-         {
-            com_ptr<ID3D11ShaderResourceView> srv;
-            native_device_context->PSGetShaderResources(0, 1, &srv);
-            uint4 size;
-            DXGI_FORMAT format;
-            GetResourceInfo(srv.get(), size, format);
-            if (size.x == 1920 && size.y == 1080 && (format == DXGI_FORMAT_B8G8R8X8_UNORM || format == DXGI_FORMAT_B8G8R8X8_TYPELESS))
-            {
-               playing_video = true;
-               if (is_custom_pass)
-               {
-                  SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaSettings);
-                  SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData, 1);
-                  updated_cbuffers = true;
-               }
-            }
-         }
-      }
-
-      if (original_shader_hashes.Contains(shader_hashes_BeginMaterialsDrawing) && upgrade_materials_samplers)
-      {
-         ignore_upgraded_samplers = false;
-      }
-      else if (!ignore_upgraded_samplers && original_shader_hashes.Contains(shader_hashes_EndMaterialsDrawing))
-      {
-         ignore_upgraded_samplers = true;
-         com_ptr<ID3D11SamplerState> samplers[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
-         native_device_context->PSGetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, &samplers[0]);
-
-         std::shared_lock shared_lock_samplers(s_mutex_samplers);
-         for (uint32_t i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; i++)
-         {
-            for (auto& custom_samplers : device_data.custom_sampler_by_original_sampler)
-            {
-               const auto it = custom_samplers.second.find(device_data.texture_mip_lod_bias_offset);
-               if (it != custom_samplers.second.end())
-               {
-                  ID3D11SamplerState* native_sampler = reinterpret_cast<ID3D11SamplerState*>(custom_samplers.first);
-                  if (it->second != nullptr && it->second == samplers[i])
-                  {
-                     samplers[i] = native_sampler;
-                     break;
-                  }
-               }
-            }
-         }
-         ID3D11SamplerState* const* samplers_const = (ID3D11SamplerState**)std::addressof(samplers[0]);
-         native_device_context->PSSetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, samplers_const);
-      }
-
-      if (original_shader_hashes.Contains(shader_hashes_Sky))
-      {
-         com_ptr<ID3D11RenderTargetView> rtv;
-         main_dsv = nullptr;
-         native_device_context->OMGetRenderTargets(1, &rtv, &main_dsv);
-      }
-
-      if (original_shader_hashes.Contains(shader_hashes_PostProcessEncode))
-      {
-         has_drawn_post_process = true;
-         com_ptr<ID3D11RenderTargetView> rtv;
-         com_ptr<ID3D11DepthStencilView> dsv;
-         native_device_context->OMGetRenderTargets(1, &rtv, &dsv);
-
-         uint4 size;
-         DXGI_FORMAT format;
-         GetResourceInfo(rtv.get(), size, format);
-
-         if (rtv.get() && rtv.get() != post_process_rtvs[final_post_process_copy_draws] &&
-             (size.x != uint(device_data.output_resolution.x + 0.5f) || size.y != uint(device_data.output_resolution.y + 0.5f)))
-         {
-            D3D11_VIEWPORT viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
-            UINT viewports_num = 1;
-            native_device_context->RSGetViewports(&viewports_num, nullptr);
-            native_device_context->RSGetViewports(&viewports_num, &viewports[0]);
-            if (viewports_num == 1)
-            {
-               com_ptr<ID3D11Resource> post_process_resource;
-               rtv->GetResource(&post_process_resource);
-               if (post_process_resource)
-               {
-                  com_ptr<ID3D11Texture2D> post_process_texture_2d;
-                  post_process_resource->QueryInterface(&post_process_texture_2d);
-                  if (post_process_texture_2d)
-                  {
-                     D3D11_TEXTURE2D_DESC texture_2d_desc;
-                     post_process_texture_2d->GetDesc(&texture_2d_desc);
-                     texture_2d_desc.Width = uint(device_data.output_resolution.x + 0.5f);
-                     texture_2d_desc.Height = uint(device_data.output_resolution.y + 0.5f);
-
-                     D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
-                     rtv->GetDesc(&rtv_desc);
-                     D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
-                     srv_desc.Format = rtv_desc.Format;
-                     srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-                     srv_desc.Texture2D.MipLevels = 1;
-                     srv_desc.Texture2D.MostDetailedMip = 0;
-
-                     upgraded_post_process_textures_2d[final_post_process_copy_draws] = nullptr;
-                     upgraded_post_process_rtvs[final_post_process_copy_draws] = nullptr;
-                     upgraded_post_process_srvs[final_post_process_copy_draws] = nullptr;
-                     native_device->CreateTexture2D(&texture_2d_desc, nullptr, &upgraded_post_process_textures_2d[final_post_process_copy_draws]);
-                     native_device->CreateRenderTargetView(upgraded_post_process_textures_2d[final_post_process_copy_draws].get(), &rtv_desc, &upgraded_post_process_rtvs[final_post_process_copy_draws]);
-                     native_device->CreateShaderResourceView(upgraded_post_process_textures_2d[final_post_process_copy_draws].get(), &srv_desc, &upgraded_post_process_srvs[final_post_process_copy_draws]);
-                     post_process_rtvs[final_post_process_copy_draws] = rtv;
-                  }
-               }
-            }
-         }
-         if (rtv.get() && rtv.get() == post_process_rtvs[final_post_process_copy_draws] && test_index != 12)
-         {
-            D3D11_VIEWPORT viewport;
-            viewport.TopLeftX = 0.f;
-            viewport.TopLeftY = 0.f;
-            viewport.MinDepth = 0.f;
-            viewport.MaxDepth = 1.f;
-            viewport.Width = device_data.output_resolution.x;
-            viewport.Height = device_data.output_resolution.y;
-            native_device_context->RSSetViewports(1, &viewport);
-            native_device_context->RSSetScissorRects(0, nullptr);
-            dsv = dsv ? main_dsv : nullptr;
-            ID3D11RenderTargetView* upgraded_post_process_rtv_const = upgraded_post_process_rtvs[final_post_process_copy_draws].get();
-            native_device_context->OMSetRenderTargets(1, &upgraded_post_process_rtv_const, dsv.get());
-         }
-         else
-         {
-            post_process_rtvs[final_post_process_copy_draws] = nullptr;
-            upgraded_post_process_textures_2d[final_post_process_copy_draws] = nullptr;
-            upgraded_post_process_rtvs[final_post_process_copy_draws] = nullptr;
-            upgraded_post_process_srvs[final_post_process_copy_draws] = nullptr;
-         }
-         final_post_process_copy_draws++;
-         ASSERT_ONCE(final_post_process_copy_draws <= max_final_post_process_copy_draws);
-      }
-      else if (has_drawn_post_process && upgraded_post_process_rtvs[final_post_process_copy_draws - 1])
-      {
-         com_ptr<ID3D11RenderTargetView> rtv;
-         com_ptr<ID3D11DepthStencilView> dsv;
-         native_device_context->OMGetRenderTargets(1, &rtv, &dsv);
-         if (rtv && (rtv == post_process_rtvs[final_post_process_copy_draws - 1] || rtv == upgraded_post_process_rtvs[final_post_process_copy_draws - 1]))
-         {
-            D3D11_VIEWPORT viewport;
-            viewport.MinDepth = 0.f;
-            viewport.MaxDepth = 1.f;
-            viewport.TopLeftX = 0.f;
-            viewport.TopLeftY = 0.f;
-            viewport.Width = device_data.output_resolution.x;
-            viewport.Height = device_data.output_resolution.y;
-            native_device_context->RSSetViewports(1, &viewport);
-            native_device_context->RSSetScissorRects(0, nullptr);
-            dsv = dsv ? main_dsv : nullptr;
-            ID3D11RenderTargetView* upgraded_post_process_rtv_const = upgraded_post_process_rtvs[final_post_process_copy_draws - 1].get();
-            native_device_context->OMSetRenderTargets(1, &upgraded_post_process_rtv_const, dsv.get());
-         }
-      }
-
-      bool is_swapchain_copy = original_shader_hashes.Contains(shader_hashes_SwapchainCopy);
-      bool is_ui = original_shader_hashes.Contains(shader_hashes_UI);
-      if (is_swapchain_copy || is_ui)
-      {
-         if (is_swapchain_copy && is_custom_pass)
-         {
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaSettings);
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData, playing_video ? 1 : 0);
-            updated_cbuffers = true;
-         }
-         int i = 0;
-         if (final_post_process_copy_draws >= 2)
-            i = is_ui ? 0 : (final_post_process_copy_draws - 1);
-         if (has_drawn_post_process && upgraded_post_process_srvs[i])
-         {
-            com_ptr<ID3D11ShaderResourceView> ui_srv;
-            native_device_context->PSGetShaderResources(0, 1, &ui_srv);
-            if (!is_ui || AreViewsOfSameResource(ui_srv.get(), post_process_rtvs[i].get()))
-            {
-               ID3D11ShaderResourceView* const upgraded_post_process_srv_const = upgraded_post_process_srvs[i].get();
-               native_device_context->PSSetShaderResources(0, 1, &upgraded_post_process_srv_const);
-            }
-            if (is_swapchain_copy)
-            {
-               D3D11_VIEWPORT viewport;
-               viewport.TopLeftX = 0.f;
-               viewport.TopLeftY = 0.f;
-               viewport.MinDepth = 0.f;
-               viewport.MaxDepth = 1.f;
-               viewport.Width = device_data.output_resolution.x;
-               viewport.Height = device_data.output_resolution.y;
-               native_device_context->RSSetViewports(1, &viewport);
-               native_device_context->RSSetScissorRects(0, nullptr);
-            }
-         }
-      }
-
-      return DrawOrDispatchOverrideType::None;
+      // Nothing game-specific to do yet: this only gains meaning once the shader hashes
+      // above are known. The template's pattern for it is in "_Template\main.cpp".
+      return DrawOrDispatchOverrideType::None; // Don't cancel the original draw call
    }
 
    void OnPresent(ID3D11Device* native_device, DeviceData& device_data) override
    {
-      if (!has_drawn_post_process)
-      {
-         main_dsv = nullptr;
-      }
-
-      while (final_post_process_copy_draws > 1)
-      {
-         post_process_rtvs[final_post_process_copy_draws - 1] = nullptr;
-         upgraded_post_process_textures_2d[final_post_process_copy_draws - 1] = nullptr;
-         upgraded_post_process_rtvs[final_post_process_copy_draws - 1] = nullptr;
-         upgraded_post_process_srvs[final_post_process_copy_draws - 1] = nullptr;
-         final_post_process_copy_draws--;
-      }
-
-      ASSERT_ONCE(ignore_upgraded_samplers);
-
-      first_frame_draw_call = true;
-      playing_video = false;
-      has_drawn_post_process = false;
-      final_post_process_copy_draws = 0;
    }
 
    void LoadConfigs() override
    {
       reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "UpgradeMaterialsSamplers", upgrade_materials_samplers);
+      reshade::get_config_value(runtime, NAME, "GameSetting01", cb_luma_global_settings.GameSettings.GameSetting01);
+      reshade::get_config_value(runtime, NAME, "GameSetting02", cb_luma_global_settings.GameSettings.GameSetting02);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
       reshade::api::effect_runtime* runtime = nullptr;
-      ImGui::NewLine();
-      if (ImGui::Checkbox("Force Anisotropic Filtering", &upgrade_materials_samplers))
-         reshade::set_config_value(runtime, NAME, "UpgradeMaterialsSamplers", upgrade_materials_samplers);
+      if (ImGui::SliderFloat("Game Setting #01", &cb_luma_global_settings.GameSettings.GameSetting01, 0.f, 1.f, "%.3f"))
+         reshade::set_config_value(runtime, NAME, "GameSetting01", cb_luma_global_settings.GameSettings.GameSetting01);
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      {
+         ImGui::SetTooltip("Hi! This changes Game Setting #01.");
+      }
+      DrawResetButton(cb_luma_global_settings.GameSettings.GameSetting01, default_luma_global_game_settings.GameSetting01, "GameSetting01", runtime);
+
+      uint GameSetting02_min = 0;
+      uint GameSetting02_max = 50;
+      if (ImGui::SliderScalar("Game Setting #02", ImGuiDataType_U32, &cb_luma_global_settings.GameSettings.GameSetting02, &GameSetting02_min, &GameSetting02_max, "%u"))
+         reshade::set_config_value(runtime, NAME, "GameSetting02", cb_luma_global_settings.GameSettings.GameSetting02);
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      {
+         ImGui::SetTooltip("Hi! This changes Game Setting #02.");
+      }
+      DrawResetButton(cb_luma_global_settings.GameSettings.GameSetting02, default_luma_global_game_settings.GameSetting02, "GameSetting02", runtime);
    }
 
    void PrintImGuiAbout() override
    {
-      ImGui::Text("Luma for \"Persona 5 Strikers\" - built on Luma Framework.\n\nCredits:\nLuma Framework contributors\nPumbo (Nioh reference implementation)");
+      ImGui::Text("Luma for \"Persona 5 Strikers\" - built on Luma Framework.\n\nCredits:\nLuma Framework contributors\n\nStatus: work in progress. This mod currently runs Luma's shared pipeline only: no shader from this engine has been identified or replaced yet, so there is nothing game-specific to show. Boot and crash reports on an unlisted game are welcome.");
    }
 };
 
@@ -309,36 +178,77 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 {
    if (ul_reason_for_call == DLL_PROCESS_ATTACH)
    {
-      Globals::SetGlobals(PROJECT_NAME, "Persona 5 Strikers Luma mod");
-      Globals::VERSION = 1;
+      const char* project_name = PROJECT_NAME;
+      const char* cleared_project_name = (project_name[0] == '_') ? (project_name + 1) : project_name;
 
-      swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;
-      swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
-      texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
-      texture_upgrade_formats = {
-         reshade::api::format::r11g11b10_float,
-      };
-      texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio | (uint32_t)TextureFormatUpgrades2DSizeFilters::No1Px;
+      Globals::SetGlobals(cleared_project_name, "Persona 5 Strikers Luma mod", nullptr /*E.g. Nexus link*/, 1);
+      Globals::DEVELOPMENT_STATE = Globals::ModDevelopmentState::WorkInProgress;
 
-      force_ignore_dpi = true;
-      enable_samplers_upgrade = true;
-      force_upgrade_linear_samplers = true;
-      ignore_upgraded_samplers = true;
+      // ==============================================================================
+      // Bring-up baseline.
+      //
+      // This is deliberately the most conservative thing that still boots: every value
+      // below is either the core default or explicitly left at it, so there is nothing
+      // for the game to trip over. On top of that:
+      //
+      //   - "swapchain_upgrade_type" is deliberately NOT set. Its core default is already
+      //     SwapchainUpgradeType::scRGB (core.hpp:473), so setting it changes nothing.
+      //     The line that actually matters is "swapchain_format_upgrade_type" below.
+      //   - "swapchain_format_upgrade_type" and "texture_format_upgrades_type" both
+      //     default to TextureFormatUpgradesType::None and are left that way. Letting
+      //     them be AllowedEnabled makes Luma rewrite the backbuffer to R16G16B16A16_FLOAT
+      //     (core.hpp:3141) and upgrade render target formats mid-flight. That is the most
+      //     likely reason an earlier revision of this file died right after
+      //     "IDXGIFactory::CreateSwapChain" in ReShade.log.
+      //
+      // Re-enable them ONE AT A TIME, testing the game boots between each, in this order:
+      //
+      //   1. swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;
+      //      -> Luma HDR output. Expect a visible change; if it crashes, this engine
+      //         needs the swapchain recreated in a specific way (check ReShade.log for how
+      //         the game recreates its runtime environment).
+      //   2. texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
+      //      texture_upgrade_formats = { reshade::api::format::r11g11b10_float };
+      //      -> 11-bit float internal render targets. Only widen this list once the
+      //         game's actual post-processing format is known.
+      //   3. Once the post-process/swapchain hashes above are known, upgrade the
+      //      post-processing targets rather than every RT in the game.
+      //
+      // texture_format_upgrades_2d_size_filters is also left at its default; only add
+      // TextureFormatUpgrades2DSizeFilters::No1Px if legitimate upgrades are being missed.
+      // ==============================================================================
 
-      // NOTE: These shader hashes are placeholders for Persona 5 Strikers.
-      // Run in Development-Release/Development-Debug and let Luma dump shaders to identify correct hashes.
-      // Replace with actual values from dumped shader files (hash in filename).
-      shader_hashes_Copy.pixel_shaders = {0x00000000};
-      shader_hashes_SwapchainCopy.pixel_shaders = {0x00000000};
-      shader_hashes_PostProcessEncode.pixel_shaders = {0x00000000};
-      shader_hashes_UI.pixel_shaders = {0x00000000};
-      shader_hashes_Sky.pixel_shaders = {0x00000000};
-      shader_hashes_BeginMaterialsDrawing.compute_shaders = {0x00000000};
-      shader_hashes_EndMaterialsDrawing.pixel_shaders = {0x00000000};
+      force_ignore_dpi = false;
+
+      enable_samplers_upgrade = false; // Can't be changed after boot (core.hpp:577)
+
+      // Shader hashes go here, once identified from a shader dump. Two separate things:
+      //
+      // (a) Mapping a name to the hashes that use that shader, so a single .hlsl file
+      //     named "<Name>_0x########.<type>_<major>_<minor>.hlsl" can serve them all:
+      //       redirected_shader_hashes["Tonemap"] = { "AABBCCDD", "11223344" };
+      //     This is the usual way passes are declared (see Heavy Rain, Watch Dogs 2,
+      //     INSIDE, Thumper, ...). Only fill it in for passes you actually replace.
+      //
+      // (b) The hash lists above, but ONLY for passes needing game-specific work in
+      //     OnDrawOrDispatch (own constants, a custom swapchain copy, ...):
+      //       shader_hashes_SwapchainCopy.pixel_shaders.emplace(std::stoul("XXXXXXXX", nullptr, 16));
+      //       shader_hashes_PostProcessEncode.pixel_shaders.emplace(std::stoul("XXXXXXXX", nullptr, 16));
+      //       shader_hashes_Sky.pixel_shaders.emplace(std::stoul("XXXXXXXX", nullptr, 16));
+      //       shader_hashes_UI.pixel_shaders.emplace(std::stoul("XXXXXXXX", nullptr, 16));
+      //     ("XXXXXXXX" is a placeholder for the 8 hex digits, upper case, no "0x".)
+      // (UI_DRAW_TYPE 2 also needs "ui_separation_format" set to a concrete DXGI_FORMAT.)
+
+#if DEVELOPMENT
+      // Pin names to known hashes so they stay readable in the ImGui pipeline views:
+      //   forced_shader_names.emplace(std::stoul("XXXXXXXX", nullptr, 16), "Swapchain Copy");
+      LogUnidentifiedShaderHashes();
+#endif // DEVELOPMENT
 
       game = new Persona5Strikers();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);
+
    return TRUE;
 }

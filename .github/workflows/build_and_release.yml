@@ -46,7 +46,7 @@ jobs:
     - name: Create ZIP per addon with matching shaders
       id: create_zip
       shell: pwsh
-      # We only build publishing and test for now, development builds can be built locally by devs (with the exclusion of the Generic and Graphics Analyzer mod, which can also be used to quickly download a dev/debug environment)
+      # We only build publishing and test for now, development builds can be built locally by devs (with the exclusion of the Generic, Graphics Analyzer and Persona 5 Strikers mods, which can also be used to quickly download a dev/debug environment)
       if: matrix.config == 'Publishing-Release' || matrix.config == 'Test-Release' || matrix.config == 'Development-Release'
       run: |
         # Scan vcxproj files to find projects that use NGX (DLSS)
@@ -169,7 +169,8 @@ jobs:
                    $projectName -like 'Generic' -or
                    $projectName -like '_Generic Mod' -or
                    $projectName -like 'Generic Mod' -or
-                   $projectName -like 'Graphics Analyzer'
+                   $projectName -like 'Graphics Analyzer' -or
+                   $projectName -like 'Persona 5 Strikers'
                  )) {
             continue
           }
