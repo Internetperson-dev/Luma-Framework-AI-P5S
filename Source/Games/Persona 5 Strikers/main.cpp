@@ -103,6 +103,15 @@ class Persona5Strikers final : public Game
 public:
    void OnInit(bool async) override
    {
+#if DEVELOPMENT
+      // Deliberately here rather than in "DllMain": this is the earliest point where
+      // ReShade is guaranteed to have finished setting up, and no mod in this repository
+      // logs from "DllMain". Doing it at load time risks a second add-on load failure
+      // (ReShade reports those only as "Failed to load add-on ... with error code 998"),
+      // and this mod had already lost exactly one load to that.
+      LogUnidentifiedShaderHashes();
+#endif // DEVELOPMENT
+
       // NOTE: the pipeline descriptions below are UNVERIFIED assumptions carried over
       // from the engine docs, not measured from the game. They only start to matter once
       // this mod ships real shaders, since that is what consumes them. Re-derive them
@@ -245,7 +254,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 #if DEVELOPMENT
       // Pin names to known hashes so they stay readable in the ImGui pipeline views:
       //   forced_shader_names.emplace(std::stoul("XXXXXXXX", nullptr, 16), "Swapchain Copy");
-      LogUnidentifiedShaderHashes();
 #endif // DEVELOPMENT
 
       game = new Persona5Strikers();
