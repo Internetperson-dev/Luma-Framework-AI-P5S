@@ -9,40 +9,52 @@ constexpr float default_peak_white = 1000;
 
 namespace Globals
 {
-	enum class ModDevelopmentState : uint8_t
-	{
-		// Might be broken or simply an empty mod that might not do anything
-		NonFunctional,
-		// Mod is WIP, might be a release candidate undergoing testing, or simply be in development
-		WorkInProgress,
-		// The mod is playable and has no known blocking issues, though it's still missing features etc
-		Playable,
-		// Generally means the mod won't be improved any further (though obviously it always might)
-		Finished,
-	};
+   enum class ModDevelopmentState : uint8_t
+   {
+      // Might be broken or simply an empty mod that might not do anything
+      NonFunctional,
+      // Mod is WIP, might be a release candidate undergoing testing, or simply be in development
+      WorkInProgress,
+      // The mod is playable and has no known blocking issues, though it's still missing features etc
+      Playable,
+      // Generally means the mod won't be improved any further (though obviously it always might)
+      Finished,
+   };
 
-	// Don't change this unless you have a reason to. There might be some other references to this name hardcoded in other strings.
-	static const char* MOD_NAME = "Luma";
-	// The following are meant to be replaced per game:
-	static char GAME_NAME[64] = "Template";
-	static char DESCRIPTION[256] = "Template Luma mod";
-	static char WEBSITE[256] = "";
-	static uint32_t VERSION = 1; // Internal version (not public facing, no major/minor/revision versioning yet). Always starts from 1. Remember to manually add a check if you delete shaders in between versions and you want to force remove them from people's installations too.
-	static ModDevelopmentState DEVELOPMENT_STATE = ModDevelopmentState::Finished; // Change this as the mod is developed to inform users and warn them when it's not finished
+   // Don't change this unless you have a reason to. There might be some other references to this name hardcoded in other strings.
+   static const char* MOD_NAME = "Luma";
+   // The following are meant to be replaced per game:
+   static char GAME_NAME[64] = "Template";
+   static char DESCRIPTION[256] = "Template Luma mod";
+   static char WEBSITE[256] = "";
+   static uint32_t VERSION = 1;                                                  // Internal version (not public facing, no major/minor/revision versioning yet). Always starts from 1. Remember to manually add a check if you delete shaders in between versions and you want to force remove them from people's installations too.
+   static ModDevelopmentState DEVELOPMENT_STATE = ModDevelopmentState::Finished; // Change this as the mod is developed to inform users and warn them when it's not finished
 
-	__forceinline void SetGlobals(const char* game_name, const char* mod_description = "", const char* mod_website = "", uint32_t mod_version = 0)
-	{
-		// We should complain if the attempted written size is greater but whatever
-		strncpy(GAME_NAME, game_name, sizeof(GAME_NAME));
-		GAME_NAME[sizeof(GAME_NAME) - 1] = '\0'; // ensure null-termination
-		strncpy(DESCRIPTION, mod_description, sizeof(DESCRIPTION));
-		DESCRIPTION[sizeof(DESCRIPTION) - 1] = '\0';
-		strncpy(WEBSITE, mod_website, sizeof(WEBSITE));
-		WEBSITE[sizeof(WEBSITE) - 1] = '\0';
+   __forceinline void SetGlobals(const char* game_name, const char* mod_description = "", const char* mod_website = "", uint32_t mod_version = 0)
+   {
+      // Never dereference a null pointer here. This runs from "DllMain", so a bad argument
+      // surfaces as "Failed to load add-on ... with error code 998" (a load-time access
+      // violation) with nothing useful logged, which is very hard to trace back here.
+      // Passing "nullptr" for the website was an easy mistake to make (the template mod
+      // itself used to do exactly that), so guard every argument instead of trusting callers.
+      if (game_name == nullptr)
+         game_name = "";
+      if (mod_description == nullptr)
+         mod_description = "";
+      if (mod_website == nullptr)
+         mod_website = "";
 
-		if (mod_version != 0 && mod_version != uint32_t(-1))
-		{
-			VERSION = mod_version;
-		}
-	}
-}
+      // We should complain if the attempted written size is greater but whatever
+      strncpy(GAME_NAME, game_name, sizeof(GAME_NAME));
+      GAME_NAME[sizeof(GAME_NAME) - 1] = '\0'; // ensure null-termination
+      strncpy(DESCRIPTION, mod_description, sizeof(DESCRIPTION));
+      DESCRIPTION[sizeof(DESCRIPTION) - 1] = '\0';
+      strncpy(WEBSITE, mod_website, sizeof(WEBSITE));
+      WEBSITE[sizeof(WEBSITE) - 1] = '\0';
+
+      if (mod_version != 0 && mod_version != uint32_t(-1))
+      {
+         VERSION = mod_version;
+      }
+   }
+} // namespace Globals

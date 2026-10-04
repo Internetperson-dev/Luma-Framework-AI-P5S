@@ -181,7 +181,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       const char* project_name = PROJECT_NAME;
       const char* cleared_project_name = (project_name[0] == '_') ? (project_name + 1) : project_name;
 
-      Globals::SetGlobals(cleared_project_name, "Persona 5 Strikers Luma mod", nullptr /*E.g. Nexus link*/, 1);
+      // NOTE: pass a real string for the website, not "nullptr". "SetGlobals" strncpy's it
+      // unconditionally, and a null pointer here is an access violation inside "DllMain",
+      // which ReShade reports only as "Failed to load add-on ... error code 998".
+      Globals::SetGlobals(cleared_project_name, "Persona 5 Strikers Luma mod", "", 1);
       Globals::DEVELOPMENT_STATE = Globals::ModDevelopmentState::WorkInProgress;
 
       // ==============================================================================
