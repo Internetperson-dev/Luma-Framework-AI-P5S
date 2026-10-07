@@ -259,7 +259,5 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       game = new Persona5Strikers();
    }
 
-   CoreMain(hModule, ul_reason_for_call, lpReserved);
-
-   return TRUE;
+   return CoreMain(hModule, ul_reason_for_call, lpReserved);
 }
